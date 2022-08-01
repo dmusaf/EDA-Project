@@ -1,0 +1,271 @@
+---
+title: "Soutenance EDA"
+author: "Ursula Alcantara Herandez & David Musafiri"
+date: "`r Sys.Date()`"
+output: ioslides_presentation
+---
+
+```{r options, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE,
+                      message=FALSE,
+                      warning=FALSE)
+```
+
+```{r install_load_packages, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+pacman::p_load(readr)
+pacman::p_load(dplyr)
+pacman::p_load(car)
+pacman::p_load(lmtest)
+pacman::p_load(ggplot2)
+pacman::p_load(GGally)
+pacman::p_load(gridExtra)
+pacman::p_load(MASS)
+pacman::p_load(leaps)
+pacman::p_load(glmnet)
+pacman::p_load(caret)
+pacman::p_load(gbm)
+pacman::p_load(knitr)
+pacman::p_load(tidyverse)  # metapackage
+pacman::p_load(tidymodels) # metapackage
+pacman::p_load(vcd)
+pacman::p_load(formula)
+pacman::p_load(glue)
+pacman::p_load(here)
+pacman::p_load(rsample)
+pacman::p_load(pls)
+
+pacman::p_load(qqplotr)
+pacman::p_load(fitdistrplus)
+pacman::p_load(metRology)
+pacman::p_load(corrplot)
+
+library(devtools)
+install_github("vqv/ggbiplot")
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+data <- read.csv("data4dm.csv")
+data <- data %>%
+  mutate(X1 = as.factor(X1))
+```
+
+## Summaries 
+
+### Summaries Categorical columns
+
+
+```{r, echo=FALSE}
+cat_cols <- unlist(lapply(data, is.factor))
+summary(data[,cat_cols])
+```
+
+
+### Numerical colmuns
+
+```{r, echo=FALSE}
+num_cols <- unlist(lapply(data, is.numeric))
+summary(data[,num_cols[1:2]])
+```
+
+## Correlation plot
+
+```{r, echo=FALSE}
+cor(data[,num_cols]) %>%
+  corrplot(method="color", type="upper", order="hclust")
+```
+
+## Conditional distributions of numerical columns
+
+```{r, echo=FALSE, figures-side, fig.show="hold", out.width="50%"}
+i <- 6
+for(x in data %>% dplyr::select(X6,X7,X8)){
+  data %>%
+  ggplot() +
+  aes(x=x) +
+  aes(y=X5) +
+  geom_smooth(
+    color='red',
+    method = "lm",
+    formula = y ~ x,
+    se=FALSE
+  )+
+  geom_point(
+    color= '#41CAF7',
+    alpha = .2
+  ) +
+  ggtitle(sprintf("Linear regression of X5 column with respect to column %s ",colnames(data)[i]))->p
+  p %>% print()
+  i<-i+1
+  #Sys.sleep(2)
+}
+```
+
+
+## Density
+
+```{r, echo=FALSE}
+
+data %>% ggplot(aes(x=X4,col=X1))+
+    geom_density() +
+    ggtitle("Conditional density of X4 under X1")
+  
+
+```
+
+## Kolmogorov-Smirnov 
+
+```{r, echo=FALSE}
+
+data  %>% filter(X1=="A") %>% dplyr::select(X4) %>% unlist %>% 
+    density()-> d1
+data  %>% filter(X1=="C") %>% dplyr::select(X4) %>% unlist %>% 
+    density()-> d2
+    print("--- Kolmogorov-Smirnov's test between conditionnal distributions of X4 and X1 values of A and C")
+    ks.test(c(d1$x,d1$y),c(d2$x,d2$y)) %>% print()
+```
+
+
+## QQ-Plot
+
+```{r}
+data_without_b <- filter(data,X1 != "B")
+qq(X1 ~ X4, aspect = 1, data = data_without_b)
+```
+
+
+
+## Density
+
+```{r, echo=FALSE}
+
+data %>% ggplot(aes(x=X5,col=X1))+
+    geom_density() +
+    ggtitle("Conditional density of X5 under X1")
+  
+
+```
+
+## Kolmogorov-Smirnov 
+
+```{r, echo=FALSE}
+
+data  %>% filter(X1=="A") %>% dplyr::select(X5) %>% unlist %>% 
+    density()-> d1
+data  %>% filter(X1=="C") %>% dplyr::select(X5) %>% unlist %>% 
+    density()-> d2
+    print("--- Kolmogorov-Smirnov's test between conditionnal distributions of X5 and X1 values of A and C")
+    ks.test(c(d1$x,d1$y),c(d2$x,d2$y)) %>% print()
+```
+
+
+## QQ-Plot
+
+
+```{r}
+data_without_b <- filter(data,X1 != "B")
+qq(X1 ~ X5, aspect = 1, data = data_without_b)
+```
+
+
+
+
+> In regards to the results of this test, we don't think that collapsing A and C was a good idea.
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+data_pca <-data %>% dplyr::select(!c(X1,Y))
+pca<- data_pca %>% prcomp(scale = T, center = T)
+data_pca %>%
+  broom::tidy(matrix="pcs") %>%
+  knitr::kable(format="markdown", digits=2)
+share_variance <- broom::tidy(data_pca, "pcs")[["percent"]]
+pca<- broom::augment(pca, data_pca)
+```
+
+##Monte-Carlo splitting
+
+```{r}
+set.seed(130)
+#MonterCarlo sample
+data %>% mc_cv(prop= 2/3 ,times=1)-> sample
+
+sample$splits[[1]] %>% assessment()->testing_set
+sample$splits[[1]] %>% analysis()->training_set
+
+quant_col <- data %>% dplyr::select(!c(X1,Y)) %>% colnames()
+```
+
+## ANOVA Testing
+
+```{r echo=FALSE}
+set.seed(4590) 
+
+anova_full <- aov(Y ~., data=data %>% dplyr::select(!X1))
+anova_best <-aov(Y ~X6, data=data)
+print("----------------Full model anova test---------------")
+summary(anova_full)
+print("------------Best predictor X6 anova test------------")
+summary(anova_best)
+
+```
+
+## Connecting quantitative variables
+
+```{r}
+myPr <- prcomp(data[,2:8], scale=T)
+biplot(myPr, scale = 0)
+#ggbiplot(myPr)
+```
+
+## Variance explained by the PCs
+
+```{r, echo=FALSE}
+data_with_PCA <- cbind(data, myPr$x[,1:7])
+
+data_with_PCA %>% mc_cv(prop= 2/3 ,times=1)-> sample2
+
+sample2$splits[[1]] %>% assessment()->PCA.testing_set
+sample2$splits[[1]] %>% analysis()->PCA.training_set
+
+lm_pr.7 <- lm(Y ~ PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7, data=PCA.training_set)
+pca_regression_model <- pcr(Y ~ X2 + X3 + X4 + X5 + X6 + X7 + X8, data=training_set, scale=TRUE, validation="CV")
+myPr <- prcomp(data[,2:8], scale=T)
+data_with_PCA <- cbind(data, myPr$x[,1:7])
+lm_pca <- lm(pca_regression_model)
+s <- step(lm_pr.7, direction="backward")
+var_explained_df <- data.frame(PC= paste0("PC",1:7),
+                               var_explained=(myPr$sdev)^2/sum((myPr$sdev)^2))
+var_explained_df %>% 
+  ggplot(aes(x=PC, y=var_explained, group=1)) +
+  geom_point()+
+  geom_line()+
+  ggtitle("Variance explained by each principal component")+
+  ylab("Variance explained")
+```
+
+
+## Picking a subset of predictors
+
+```{r}
+stepAIC(lm_pr.7)
+```
+
+
+## Response transformation
+
+```{r}
+box_model<-boxcox(Y~.,data=training_set, lambda=seq(-3,3))
+```
+
+## Model with log(Y) ~ .
+```{r, fig.show="hold", out.width="50%"}
+new_model <- lm(log(Y+0.00000001) ~ .,data=data)
+plot(new_model)
+```
+
+## Combining polynomial model and response transformation
+```{r, echo=FALSE, fig.show="hold", out.width="50%"}
+polynomial_model_with_response_transformation <- lm(log(Y+0.0000001) ~ X1 + poly(X2, degree=3) + poly(X3, degree=3) + poly(X4, degree=3) + poly(X5, degree=3) + poly(X6, degree = 3) + poly(X7, degree = 3) + poly(X8, degree = 3, raw=T), data = training_set)
+plot(polynomial_model_with_response_transformation)
+```
+

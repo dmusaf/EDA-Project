@@ -1,0 +1,675 @@
+---
+title: 'Homework 2021-22: Regression and PCA'
+author: "ALCANTARA HERNANDEZ Ursula and MUSAFIRI David"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    fig_caption: yes
+    keep_md: yes
+    number_sections: no
+    toc: yes
+  html_notebook:
+    code_folding: none
+    number_sections: yes
+    toc: yes
+  pdf_document:
+    toc: yes
+subtitle: 'Deadline: 2022-04-30'
+params:
+  datapath: ''
+---
+
+# Deliverables
+
+1. **2022-04-30:** a `nom1_nom2.Rmd` file that can be `knitted` under `rstudio`
+  - Your file should be knitted without errors and the result should be an html document that can be viewed in a modern browser.
+  - The file should contain the code used to generate plots and numerical summaries
+  - The file should contain the texts of your comments (either in English or in French)
+  - Comments should be written with care, precision and should be concise
+  - File `nom1_nom2.Rmd` will be uploaded on `Moodle` on due date
+2. A short defense (15 minutes + 15 minutes questions) with slides (May)
+
+You may work in pairs
+
+
+---
+
+# Objectives
+
+This notebook aims at
+
+  - Working with **tables** (`data.frames`, `tibbles`, `data.tables`, ...) using `dplyr` or any other query language (as provided for example by `data.table`)
+  - Exploring a multivariate dataset
+  - Using **PCA** to cope with collinearity of explanatory variables
+  - Performing simple and multiple linear regression
+  - Interpreting numerical and graphic diagnostics
+  - Perform variable selection using penalization
+  - Assess predictive performance of linear models
+  - Transform response and explanatory variables so as to improve interpretation and predictive performance
+
+
+---
+
+```{r options, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE,
+                      message=FALSE,
+                      warning=FALSE)
+```
+
+
+```{r install_load_packages}
+pacman::p_load(readr)
+pacman::p_load(dplyr)
+pacman::p_load(car)
+pacman::p_load(lmtest)
+pacman::p_load(ggplot2)
+pacman::p_load(GGally)
+pacman::p_load(gridExtra)
+pacman::p_load(MASS)
+pacman::p_load(leaps)
+pacman::p_load(glmnet)
+pacman::p_load(caret)
+pacman::p_load(gbm)
+pacman::p_load(knitr)
+pacman::p_load(tidyverse)  # metapackage
+pacman::p_load(tidymodels) # metapackage
+pacman::p_load(vcd)
+pacman::p_load(formula)
+pacman::p_load(glue)
+pacman::p_load(here)
+pacman::p_load(rsample)
+pacman::p_load(pls)
+
+pacman::p_load(qqplotr)
+pacman::p_load(fitdistrplus)
+pacman::p_load(metRology)
+```
+
+
+---
+
+# Data loading
+
+Load the data.
+```{r}
+data <- read.csv("data4dm.csv")
+```
+
+
+Make columns with less than ten distinct values factors.
+
+
+```{r}
+data %>%
+  summarise_all(n_distinct)
+```
+```{r}
+data <- data %>%
+  mutate(X1 = as.factor(X1))
+```
+
+
+
+---
+
+# Sanity checks
+
+## Are there missing values?
+
+All numerical entries should be positive. $0$ is a surrogate for `NA`.
+
+```{r}
+colSums(data == 0)
+```
+
+
+## Numerical summary for categorical columns
+
+The numerical summary is a contingency table
+
+```{r}
+cat_cols <- unlist(lapply(data, is.factor))
+
+summary(data[,cat_cols])
+```
+
+
+## Numerical summary for numerical columns
+
+For each column, a numerical summary contains as much information as the output of function `summary()` (when applied to a numeric vector).
+```{r}
+num_cols <- unlist(lapply(data, is.numeric))
+summary(data[,num_cols])
+for(c in data[2:9]){plot(density(c))}
+```
+
+Make any relevant comment
+> Columns have a median almost equal to the mean, they look quite well  distributed between their min and max. 
+
+## Pair plots
+
+Use `ggpairs` from `GGally` to get a _big picture_ of the dataset
+
+Display linear correlations between the numerical columns (packages `corrr` or `corrplot` may be useful)
+```{r}
+ggpairs(data[,num_cols])
+```
+
+## Compare the conditional distributions of the numerical columns given the categories from categorical columns
+
+Perform qqplots (not normal qqplots), compute two-sample Kolmogorov-Smirnov statistics
+
+
+```{r}
+data %>% ggplot(aes(x=X4,col=X1))+
+    geom_density() +
+    ggtitle("Conditional density of X4 under X1")
+```
+
+```{r}
+data  %>% filter(X1=="A") %>% dplyr::select(X4) %>% unlist %>% 
+    density()-> d1
+data  %>% filter(X1=="C") %>% dplyr::select(X4) %>% unlist %>% 
+    density()-> d2
+    print("--- Kolmogorov-Smirnov's test between conditionnal distributions of X4 and X1 values of A and C")
+    ks.test(c(d1$x,d1$y),c(d2$x,d2$y)) %>% print()
+```
+
+```{r}
+data_without_b <- filter(data,X1 != "B")
+qq(X1 ~ X4, aspect = 1, data = data_without_b)
+```
+
+> As we can see, even if the conditional distributions of X4 under X1=A and X2=C look very similar, when we perform a Kolmogorov-Smirnov's test, we get a very low p-value (< 2.2e-16) which means that both samples can't result from the same distribution. On the QQ-Plot, we can see that most of the quantiles are the same but the two last ones are far away from each other.
+
+```{r}
+data  %>% filter(X1=="A") %>% dplyr::select(X5) %>% unlist %>% 
+    density()-> d1
+data  %>% filter(X1=="C") %>% dplyr::select(X5) %>% unlist %>% 
+    density()-> d2
+    print("--- Kolmogorov-Smirnov's test between conditionnal distributions of X5 and X1 values of A and C")
+    ks.test(c(d1$x,d1$y),c(d2$x,d2$y)) %>% print()
+```
+
+```{r}
+data_without_b <- filter(data,X1 != "B")
+qq(X1 ~ X5, aspect = 1, data = data_without_b)
+```
+
+> However, there are some variables were the "conditional" samples may come from the same distribution. For example, when we perform a Kolmogorov-Smirnov's test on samples of X5 under X1=A et X5 under X1=C we found a p-value of 0.55 which means that we definetely can't reject the null hypothesis for X5.
+
+Is it worth collapsing some qualitative categories (use `fct_collapse()` from `forcats`)?
+
+> As we can see the conditional distribution between A and C is very close, and with the Kolmogorov-Smirnov test results( low values with a hight probabilty to occure) we don't reject the hipotesis that conditional distrubution between A and C are made by the same law. To conclude, we can merge the category 'A' and 'C'
+
+```{r}
+new_factors <- fct_collapse(data$X1, X = c('A', 'C'), Y = c('B'))
+data$X1 <- new_factors
+```
+
+```{r}
+head(data)
+```
+
+## Track functional dependencies
+
+Perform linear regression of  column `X5` with respect to columns `X6`, `X7`, `X8`.
+
+```{r}
+i<-6
+
+for(x in data %>% dplyr::select(X6,X7,X8)){
+  data %>%
+  ggplot() +
+  aes(x=x) +
+  aes(y=X5) +
+  geom_smooth(
+    color='red',
+    method = "lm",
+    formula = y ~ x,
+    se=FALSE
+  )+
+  geom_point(
+    color= '#41CAF7',
+    alpha = .2
+  ) +
+  ggtitle(sprintf("Linear regression of X5 column with respect to column %s ",colnames(data)[i]))->p
+  p %>% print()
+  i<-i+1
+  #Sys.sleep(2)
+}
+```
+
+
+
+Is it worth considering regression of `Y` with respect to `X5`?
+
+> The corelation factor between the two columns is very low (0.541), so no, it's not a good idea.
+
+---
+
+# PCA
+
+Perform PCA on the explanatory variables (`X1, ..., X8`).
+```{r}
+data_pca <-data %>% dplyr::select(!c(X1,Y))
+pca<- data_pca %>% prcomp(scale = T, center = T)
+data_pca %>%
+  broom::tidy(matrix="pcs") %>%
+  knitr::kable(format="markdown", digits=2)
+share_variance <- broom::tidy(data_pca, "pcs")[["percent"]]
+pca<- broom::augment(pca, data_pca)
+pca %>%
+  ggplot() +
+  aes(x=.fittedPC1, y=.fittedPC2) +
+  aes(colour=data$X1) +
+  geom_point() +
+  ggtitle("Explanatory variables  projected on first two principal axes") +
+  xlab(paste("PC1 (", share_variance[1], "%)", sep="")) +
+  ylab(paste("PC2 (", share_variance[2], "%)", sep="")) ->p
+
+
+
+
+
+  
+
+
+
+
+p
+
+#pca
+```
+
+```{r}
+myPr <- prcomp(data[,2:8], scale=T)
+biplot(myPr, scale = 0)
+```
+
+Is it possible to connect qualitative variables with PCA (which is performed on quantitative columns)?
+
+> Given the graph above, it's possible to connect the variables X7 and X5 as well as variables X2 and X3.
+
+
+---
+
+# Regression framework
+
+The data were not collected from experimental results. They were rather collected as a collection of `r nrow(df)` i.i.d. multivariate observations (this corresponds to the _random design_ setting whereas we have studied the _fixed design_ framework during the course). We aim at predicting the value of $Y$ from $X^1, \ldots, X^8$, that is to find a function $f$ such that
+$$\mathbb{E}\left[\left(Y - f(X^1, \ldots, X^8)\right)^2\right]$$ is minimized.
+
+If there is no prescription about $f$ (beyond measurability and square integrability), the minimizer is (a version of) the conditional expectation of $Y$ with respect to $\sigma(X^1, \ldots, X^8)$.
+
+We will look for functions that satisfy criteria.
+
+1. First we look for simple linear functions: $a X^i +b$ for $i \in \{1, \ldots, 8\}$ and
+$X^i$ a numerical variable.
+2. Second, we look at the best mutivariate linear function $\sum_{i=1} \beta_i X^i$ where qualitative columns have been properly encoded.
+3. We look at the mutivariate linear functions of the _principal components_: $\sum_{i=1}^q \beta_i \widetilde{X}^i$ where the $\widetilde{X}^i$ are the principal component columns (use `broom::augment()` to retrieve them for `prcomp` objects).
+4. We attempt to perform _variable selection_
+5. If diagnostics (either numerical or graphical) suggest that, conditionally on the design matrix, the homoschedastic Gaussian noise assumptions are violated, we may transform the data, look for a prediction of $(Y^{\lambda} - 1)/\lambda$ for some $\lambda \in \mathbb{R}$ (notice that $Y$ is positive), with the convention that for $\lambda =0$, $(Y^{\lambda} - 1)/\lambda=\log(Y)$.
+6. In a further step, we look for coefficients that minimize:
+$$\sum_{i=1}^n \left( (Y_i^{\lambda}-1)/\lambda - \left(\beta_0 + \sum_{k=1}^d \sum_{j=1}^8 \beta_{j,k} (X^i)^k \right)\right)^2$$ for $d=3$.
+
+
+
+---
+
+# Split the data
+
+As we dive into predictive modelling, it is useful to split the data into two parts: a training set (two thirds of observations) and a testing set (one third of observations).  This splitting is best performed at random. Try to balance evenly the different levels of the categorical variables in the training and testing set.
+
+Package `rsample` could be useful.
+
+```{r}
+set.seed(130)
+#MonterCarlo sample
+data %>% mc_cv(prop= 2/3 ,times=1)-> sample
+
+sample$splits[[1]] %>% assessment()->testing_set
+sample$splits[[1]] %>% analysis()->training_set
+
+quant_col <- data %>% dplyr::select(!c(X1,Y)) %>% colnames()
+
+```
+
+
+---
+
+# Simple linear regressions
+
+Perform simple linear regressions of $Y$ with respect to each quantitative numerical column.
+
+```{r}
+lr_col <-c()
+i<-2
+mean_error <- c()
+for(c in training_set[quant_col]){
+  print(sprintf("---- Linear regression with %s column ------",colnames(data)[i]))
+  lr<-lm(training_set$Y~c)
+  lr_col<-c(lr_col,lr)
+  mean_error <- c(mean_error, mean(residuals(lr)^2))
+  summary(lr) %>% print()
+}
+
+mean_error
+```
+
+
+Comment on each numerical summary and comments the diagnostic plots.
+> the regression isn't neat, values to predict aren't linear with respect  quantitative columns.
+
+Use the coefficients estimated on the training set to predict $Y$ on the testing set. Compare the training error and the testing error.
+
+```{r}
+mean_error_testing <- c()
+for(c in training_set[quant_col]){
+  lr<-lm(Y~c, data=training_set)
+  p <- predict(lr, newdata = testing_set)
+  error <- testing_set$Y - p
+
+  mean_error_testing <- c(mean_error_testing, mean(error^2))
+}
+mean_error_testing
+
+```
+> As we can expect the testing error is bigger than the training one. That can simply be explain by the fact that the model is created such as it minimizes the training error.
+
+
+What is your best predictor?
+
+> X6 seems to be the best predictor with this training dataset.
+
+Do you think that the Gaussian Linear Modelling assumptions are satisfied?
+
+```{r}
+X6_lr <- lm(Y ~ X6, data = training_set)
+
+plot(X6_lr)
+```
+
+
+> As we can see we don't have the normality of the error (Normal Q-Q plot). The Gaussian Linear Modelling assumptions are not satisfied.
+
+
+---
+
+# Multiple linear regression
+
+Perform linear regression of $Y$ with respect to all predictors
+
+```{r}
+lm_multi <- lm(Y ~ ., data=training_set)
+mean(residuals(lm_multi)^2)
+```
+
+Which coefficients are deemed non-zero?
+
+```{r}
+lm_multi
+```
+
+
+Perform ANOVA testing to compare the full model (all predictors) with respect to your best
+simple model (one predictor). Comment.
+```{r}
+set.seed(4590) 
+
+anova_full <- aov(Y ~., data=data %>% dplyr::select(!X1))
+anova_best <-aov(Y ~X6, data=data)
+print("----------------Full model anova test---------------")
+summary(anova_full)
+print("------------Best predictor X6 anova test------------")
+summary(anova_best)
+
+
+```
+
+> Comment: the residuals number is bigger with the best predictor (4168<4174) as well as with the sum square residuals (20 467<35 686). The full model could do an overfit. We can see that the F-value of X6 with the best predictor is less than the  F value with all predictors (900<1350) this could mean that with the full model, the variation is more credible by the independent variables than with only the best predictor. 
+
+> We conclude that the full model explains better how Y values are affected by the full predicors. 
+
+
+Use again the coefficients estimated on the training set to predict $Y$ on the testing set. Compare the training error and the testing error.
+
+```{r}
+p2 <- predict(lm_multi, newdata = testing_set)
+error2 <- testing_set$Y - p2
+sqrt(mean(error2^2))
+```
+> The testing and training error are way closer than in the simple linear regression. We still have the relation training_error < testing_error.
+
+---
+
+# Regression with respect to principal components
+
+Perform linear regression of $Y$ with respect to one, two, ... principal components computed on the training set.
+```{r}
+data_with_PCA <- cbind(data, myPr$x[,1:7])
+```
+
+```{r}
+data_with_PCA %>% mc_cv(prop= 2/3 ,times=1)-> sample2
+
+sample2$splits[[1]] %>% assessment()->PCA.testing_set
+sample2$splits[[1]] %>% analysis()->PCA.training_set
+
+```
+
+```{r}
+lm_pr.1 <- lm(Y ~ PC1, data=PCA.training_set)
+lm_pr.2 <- lm(Y ~ PC1 + PC2, data=PCA.training_set)
+lm_pr.3 <- lm(Y ~ PC1 + PC2 + PC3, data=PCA.training_set)
+lm_pr.4 <- lm(Y ~ PC1 + PC2 + PC3 + PC4, data=PCA.training_set)
+lm_pr.5 <- lm(Y ~ PC1 + PC2 + PC3 + PC4 + PC5, data=PCA.training_set)
+lm_pr.6 <- lm(Y ~ PC1 + PC2 + PC3 + PC4 + PC5 + PC6, data=PCA.training_set)
+lm_pr.7 <- lm(Y ~ PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7, data=PCA.training_set)
+```
+
+```{r}
+plot(lm_pr.1)
+```
+
+
+
+
+
+```{r}
+pca_regression_model <- pcr(Y ~ X2 + X3 + X4 + X5 + X6 + X7 + X8, data=training_set, scale=TRUE, validation="CV")
+summary(pca_regression_model)
+```
+
+How many principal components would you use to perform prediction?  (`stepAIC`  from `MASS` can be useful)
+
+
+```{r}
+var_explained_df <- data.frame(PC= paste0("PC",1:7),
+                               var_explained=(myPr$sdev)^2/sum((myPr$sdev)^2))
+```
+
+
+```{r}
+var_explained_df %>% 
+  ggplot(aes(x=PC, y=var_explained, group=1)) +
+  geom_point()+
+  geom_line()+
+  ggtitle("Variance explained by each principal component")+
+  ylab("Variance explained")
+  
+```
+
+```{r}
+plot(pca_regression_model, "validation")
+```
+```{r}
+summary(lm_pr.2)
+```
+> We choose the first two principal components. It assures us a Root Mean Square Error of 2.629 which is slightly higher than the one for multilinear regression.
+
+
+Use again the coefficients estimated on the training set to predict $Y$ on the testing set. Compare the training error and the testing error.
+
+```{r}
+predictions <- predict(pca_regression_model, testing_set, ncomp = 4)
+```
+
+```{r}
+mean((predictions - testing_set$Y)^2)
+```
+
+> The training error and the testing error (RMSE) are still pretty close
+
+Package `broom` offers function to manipulate the outputs of `prcomp`.
+
+---
+
+# Variable selection
+
+Go back to Multiple linear regression with respect to the original variables. Use `stepAIC`  from `MASS` to pick a subset of predictors.
+
+```{r}
+lm_multi2 <- lm(Y ~ ., data = training_set)
+step <- stepAIC(lm_multi2, direction="both", trace=FALSE)
+step$anova
+```
+
+```{r}
+stats::step(lm_multi2, direction="backward")
+```
+
+> We can see that the subset that minimizes the AIC is the entire set of predictors (<none>).
+
+```{r}
+new_lm <- lm(Y ~ X1 + X3 + X4 + X5 + X6 + X7 + X8, data=training_set)
+#step(new_lm, direction="backward")
+```
+
+
+
+
+In order to optimize the predictive capabilities of your model (perforance on the testing set), you may try to use _cross-validation_ to identify a good set of predictors.
+```{r}
+#cross-validation
+cross_val <- trainControl(method = "LOOCV", number = 7, verboseIter =FALSE )
+
+
+
+#training the model
+cross_lm<-caret::train(form=Y~., data=training_set, method="lm", trControl= cross_val)
+
+#final model (with best parameters)
+cross_lm$finalModel
+
+
+cross_lm
+
+
+
+```
+
+
+```{r}
+stats::step(cross_lm$finalModel, direction="backward")
+#stepAIC on the last model: UAH comment: meeeeh
+stepAIC(cross_lm$finalModel)
+```
+> We still can't drop any variable.
+
+```{r}
+plot(lm_multi)
+```
+
+
+---
+
+# Response transformation
+
+You may use `MASS::boxcox()` to estimate an optimal transformation of the response variable.
+
+```{r}
+#fit linear regression model
+box_model<-boxcox(Y~.,data=training_set, lambda=seq(-3,3))
+
+```
+
+
+
+In any case, use the logarithmic transformation (`lambda=0`) and retrain your linear models
+
+
+```{r}
+
+lambda <- box_model$x[which.max(box_model$y)]
+lambda
+
+
+
+
+
+new_model <- lm(log(Y) ~ .,data=data)
+plot(new_model)
+```
+
+
+
+Do the linear models satisfy the Gaussian Linear Modelling assumptions (according to the diagnsotic plots)?
+
+> No linearity whatsoever (cf. Residuals vs Fitted), the line should be straight (at least way straighter). We still don't have the normality of the error (cf. Normal Q-Q) at the begining of the tail the residuals tend to "escape" a lot from the normal line. No homoschedacity whatsoever either. (cf. Scale-Location). So no the linear models don't satisfy the GLM assumptions.
+
+
+
+Again, try to pick the model with the best predictive performance
+
+```{r}
+predictions2 <- predict(new_model, newdata = testing_set)
+mean((predictions2 - testing_set$Y)^2)
+```
+
+
+---
+
+# Combine response transformation and higer order modelling
+
+Use `poly()` to perform linear modelling with respect to powers of the original predictors (up to degree `3`).
+
+```{r}
+polynomial_model <- lm(Y ~ poly(X2, degree=3) + poly(X3, degree=3) + poly(X4, degree=3) + poly(X5, degree=3) + poly(X6, degree = 3) + poly(X7, degree = 3) + poly(X8, degree = 3, raw=T), data = training_set)
+summary(polynomial_model)
+```
+
+
+
+Do the linear models satisfy the Gaussian Linear Modelling assumptions (according to the diagnsotic plots)?
+
+```{r}
+plot(polynomial_model)
+```
+
+> We now have the linearity of the relationship between predictors and results. The residuals don't look normally distributed. We don't think that the homoscedasticity assumption is verified (cf. Scale-Location)
+
+
+
+```{r}
+polynomial_model_with_response_transformation <- lm(log(Y) ~ X1 + poly(X2, degree=3) + poly(X3, degree=3) + poly(X4, degree=3) + poly(X5, degree=3) + poly(X6, degree = 3) + poly(X7, degree = 3) + poly(X8, degree = 3, raw=T), data = training_set)
+```
+
+```{r}
+plot(polynomial_model_with_response_transformation)
+```
+> When we combine the polynomial model and the response transformation we have finally a model that seems to satisfy all the assumptions of the Gaussian Linear Modelling (linearity, homoscedatiscity and normality of the distributions of residuals).
+
+
+Again, try to pick the model with the best predictive performance
+
+```{r}
+predictions3 <- predict(polynomial_model, newdata = testing_set)
+mean((predictions3 - testing_set$Y)^2)
+```
+
+```{r}
+predictions4 <- predict(polynomial_model_with_response_transformation, newdata = testing_set)
+mean((predictions4 - testing_set$Y)^2)
+```
+
+> In terms of predictions, the polynomial model whitout response transformation is way better than the one with response transformation.
